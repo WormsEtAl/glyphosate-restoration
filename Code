@@ -1,1 +1,1641 @@
 
+### Selected Code for "Glyphosate-based restoration of a degraded grassland threatens soil health and the diversity of nematode communities" paper
+
+#Lines 17- 81: 18s metabarcoding in Qiime2 (to create ASV tables from raw reads)
+#Lines 82-104: Load R Libraries
+#Lines 229-250: Useful R function for merging samples in phyloseq
+#Lines 251-1243: Figure creation
+#Lines 1244 -1641 Statistics
+
+
+
+
+
+
+
+
+#### Read processing in Qiime2#####
+#activate Qiime environment 
+/home/uflJPM/jparrufl/Summer22/ColoradoNema01
+source activate qiime2-2022.2
+
+#Import reads
+qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path /home/uflJPM/jparrufl/colorado/data/ --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path demux01.qza
+
+#Visualize the imported reads for quality and decide where to trim primer.  
+qiime demux summarize --i-data demux01.qza --o-visualization demux01.qzv
+scp jparrufl@ron.sr.unh.edu:Summer22/ColoradoNema01/demux01.qzv -demux01colroado.qzv
+
+#Trim primers based on chosen location from quality plot 
+qiime cutadapt trim-paired --i-demultiplexed-sequences demux01.qza --p-cores 16 --p-adapter-f GGTGGTGCATGGCCGTTCTTAGTT...GTAGGTGAACCTGCAGAAGGATCA --p-adapter-r TACAAAGGGCAGGGACGTAAT...GACGGGCGGTGTGTAC --o-trimmed-sequences trimmed01.qza --verbose
+
+#Visualize to confirm that they trimmed because cutadapt is very particular
+qiime demux summarize --i-data trimmed01.qza --o-visualization trimmed01.qzv
+scp jparrufl@ron.sr.unh.edu:Summer22/ColoradoNema01/trimmed01.qzv -trimmed01colroado.qzv
+
+#Run the DADA pipleine to create 100% ASVs, Nohup just lets you run it in the background. 
+nohup qiime dada2 denoise-paired --i-demultiplexed-seqs trimmed01.qza  --output-dir otu-dada2 --p-trim-left-f 0 --p-trim-left-r 0 --p-trunc-len-f 210 --p-trunc-len-r 180 --p-n-threads 0 &
+  
+  #Visualize DATA quality checking % loss at each step
+  qiime metadata tabulate --m-input-file denoising_stats.qza --o-visualization statsotu-dada2
+scp jparrufl@ron.sr.unh.edu:Summer22/ColoradoNema01/otu-dada2/statsotu-dada2.qzv -denoise2colroado.qzv
+
+  cd otu-dada2 
+#Convert representative sequences file into a .fasta format. 
+qiime tools export --input-path representative_sequences.qza --output-path otu-dada2
+cd otu-dada2
+
+#Generate representative sequences file
+qiime feature-table tabulate-seqs --i-data representative_sequences.qza --o-visualization rep-seqs
+qiime tools export --input-path table.qza --output-path exported-feature-table
+cd exported-feature-table
+
+#Assign taxnomy via Blast
+nohup blastn -query dna-sequences.fasta -subject /home/uflJPM/kgattoniufl19/database_filtering/original_files/2019_re-assignement/New_nematode_DB_metagenomes_removed_with_SALCI.txt -out blastn_resultotudad2.txt -max_target_seqs 5 -outfmt "6 qseqid sseqid qlen slen pident qcovs mismatch length gaps qstart qend sstart send bitscore evalue staxids" 
+
+
+#Convert ASV table into a TSV file that you can easily work with in R
+biom convert -i feature-table.biom -o ExportTableotudada2.tsv --to-tsv
+scp jparrufl@ron.sr.unh.edu:Summer22/ColoradoNema01/otu-dada2/exported-feature-table/ExportTableotudada2.tsv ExportTableotudada2.tsv
+
+#Get percent %, querry coverage and other stats from the Blast
+cd /home/uflJPM/jparrufl/Summer22/ColoradoNema01/otu-dada2/otu-dada2
+nohup blastn -query dna-sequences.fasta -subject /home/uflJPM/kgattoniufl19/database_filtering/original_files/v138_with_new_18SNema_and_SALCI.txt -out blastn_result138andNEMA.txt -max_target_seqs 5 -outfmt "6 qseqid sseqid qlen slen pident qcovs mismatch length gaps qstart qend sstart send bitscore evalue staxids" &
+
+scp jparrufl@ron.sr.unh.edu:Summer22/ColoradoNema01/otu-dada2/otu-dada2/blastn_result138andNEMA.txt  newdatabase.txt
+
+#Create tree for Phylogetnic diversity
+cd /home/uflJPM/jparrufl/Summer22/ColoradoNema01/otu-dada2
+source activate qiime2-2022.2
+qiime alignment mafft --i-sequences representative_sequences.qza --o-alignment aligned-rep-seqs.qza
+qiime alignment mask --i-alignment aligned-rep-seqs.qza --o-masked-alignment masked-aligned-rep-seqs.qza
+qiime phylogeny fasttree --i-alignment masked-aligned-rep-seqs.qza --o-tree unrooted-tree.qza
+qiime phylogeny midpoint-root --i-tree unrooted-tree.qza --o-rooted-tree rooted-tree.qza
+qiime tools export --input-path rooted-tree.qza  --output-path exported-treerooted
+
+
+
+
+
+
+
+###Install R Packages####
+#remotes::install_github("schuyler-smith/phylosmith")
+library(phylosmith)
+library(phyloseq)
+library(vegan)
+library(agricolae)
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(glmmTMB)
+library(emmeans)
+library(car)
+library(MuMIn)
+library(agridat)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(phylosmith)
+library(hillR)
+library(scales)
+library(GGally)
+library(lavaan)
+library(data.table)
+#### Import into R####
+
+#setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/First85id97q")
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+
+##Import into R
+#otu table
+RawOtu <- read.table("otu.csv",sep=",", row.names=1,header=T, check.names=F,blank.lines.skip = FALSE)
+RawOtu <- RawOtu[,order(colnames(RawOtu))]
+#taxnomy strings
+#taxmat <- read.table("tax.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+taxmat <- read.table("taxfixdatabaseDolichodoridae.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+#mapping file 
+mapping <- read.table("map.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+
+##correct for soil moisture
+
+RawOtu$CFN_nema_01 <- RawOtu$CFN_nema_01*1
+RawOtu$CFN_nema_02 <- RawOtu$CFN_nema_02*4.99471471775354
+RawOtu$CFN_nema_03 <- RawOtu$CFN_nema_03*4.85705728967072
+RawOtu$CFN_nema_04 <- RawOtu$CFN_nema_04*4.8998492615273
+RawOtu$CFN_nema_05 <- RawOtu$CFN_nema_05*5.25206773906887
+RawOtu$CFN_nema_06 <- RawOtu$CFN_nema_06*5.75137385943067
+RawOtu$CFN_nema_07 <- RawOtu$CFN_nema_07*4.68077943635185
+RawOtu$CFN_nema_08 <- RawOtu$CFN_nema_08*4.95221675385242
+RawOtu$CFN_nema_09 <- RawOtu$CFN_nema_09*4.96926294704316
+RawOtu$CFN_nema_10 <- RawOtu$CFN_nema_10*4.89377378863439
+RawOtu$CFN_nema_11 <- RawOtu$CFN_nema_11*1
+RawOtu$CFN_nema_12 <- RawOtu$CFN_nema_12*5.4331786398711
+RawOtu$CFN_nema_13 <- RawOtu$CFN_nema_13*5.39317767231131
+RawOtu$CFN_nema_14 <- RawOtu$CFN_nema_14*5.23317808615133
+RawOtu$CFN_nema_15 <- RawOtu$CFN_nema_15*5.10466797537081
+RawOtu$CFN_nema_16 <- RawOtu$CFN_nema_16*5.35113110978638
+RawOtu$CFN_nema_17 <- RawOtu$CFN_nema_17*5.41592852525469
+RawOtu$CFN_nema_18 <- RawOtu$CFN_nema_18*5.21016340322872
+RawOtu$CFN_nema_20 <- RawOtu$CFN_nema_20*5.34693273631336
+RawOtu$CFN_nema_21 <- RawOtu$CFN_nema_21*5.22467652969608
+RawOtu$CFN_nema_22 <- RawOtu$CFN_nema_22*5.28475049519698
+RawOtu$CFN_nema_23 <- RawOtu$CFN_nema_23*5.20042435462734
+RawOtu$CFN_nema_24 <- RawOtu$CFN_nema_24*1
+RawOtu$CFN_nema_25 <- RawOtu$CFN_nema_25*2.11181865027721
+RawOtu$CFN_nema_26 <- RawOtu$CFN_nema_26*2.09589906000966
+RawOtu$CFN_nema_27 <- RawOtu$CFN_nema_27*2.07486611938814
+RawOtu$CFN_nema_28 <- RawOtu$CFN_nema_28*2.07233844500424
+RawOtu$CFN_nema_29 <- RawOtu$CFN_nema_29*1
+RawOtu$CFN_nema_30 <- RawOtu$CFN_nema_30*2.14931275724587
+RawOtu$CFN_nema_31 <- RawOtu$CFN_nema_31*2.06626390205586
+RawOtu$CFN_nema_32 <- RawOtu$CFN_nema_32*2.01294803901776
+RawOtu$CFN_nema_33 <- RawOtu$CFN_nema_33*2.08484082513925
+RawOtu$CFN_nema_34 <- RawOtu$CFN_nema_34*2.13065973586088
+RawOtu$CFN_nema_35 <- RawOtu$CFN_nema_35*2.05963976389904
+RawOtu$CFN_nema_36 <- RawOtu$CFN_nema_36*2.04752946377064
+RawOtu$DNegParr <- RawOtu$DNegParr*1
+RawOtu$Parr107 <- RawOtu$Parr107*2.62985002651953
+RawOtu$Parr109 <- RawOtu$Parr109*2.69990676025898
+RawOtu$Parr111 <- RawOtu$Parr111*2.58650054463425
+RawOtu$Parr112 <- RawOtu$Parr112*2.56352270841219
+RawOtu$Parr116 <- RawOtu$Parr116*2.52762092776364
+RawOtu$Parr117 <- RawOtu$Parr117*2.56402484062034
+RawOtu$Parr117redo <- RawOtu$Parr117redo*2.56402484062034
+RawOtu$Parr118 <- RawOtu$Parr118*2.70923380871184
+RawOtu$Parr120 <- RawOtu$Parr120*2.51809820193136
+RawOtu$Parr122 <- RawOtu$Parr122*2.4615652356124
+RawOtu$Parr124 <- RawOtu$Parr124*2.49069826317334
+RawOtu$Parr125 <- RawOtu$Parr125*2.53885875658478
+RawOtu$ParrNG <- RawOtu$ParrNG*1
+
+2020
+2021
+
+##account for 20g vs 50g
+RawOtu$CFN_nema_25 <- RawOtu$CFN_nema_25*2.5
+RawOtu$CFN_nema_28 <- RawOtu$CFN_nema_28*2.5
+RawOtu$CFN_nema_32 <- RawOtu$CFN_nema_32*2.5
+RawOtu$CFN_nema_36 <- RawOtu$CFN_nema_36*2.5
+RawOtu$CFN_nema_26 <- RawOtu$CFN_nema_26*2.5
+RawOtu$CFN_nema_27 <- RawOtu$CFN_nema_27*2.5
+RawOtu$CFN_nema_30 <- RawOtu$CFN_nema_30*2.5
+RawOtu$CFN_nema_35 <- RawOtu$CFN_nema_35*2.5
+RawOtu$CFN_nema_31 <- RawOtu$CFN_nema_31*2.5
+RawOtu$CFN_nema_33 <- RawOtu$CFN_nema_33*2.5
+RawOtu$CFN_nema_34 <- RawOtu$CFN_nema_34*2.5
+RawOtu$CFN_nema_24 <- RawOtu$CFN_nema_24*2.5
+RawOtu$CFN_nema_29 <- RawOtu$CFN_nema_29*2.5
+RawOtu$Parr112 <- RawOtu$Parr112*2.5
+RawOtu$Parr116 <- RawOtu$Parr116*2.5
+RawOtu$Parr120 <- RawOtu$Parr120*2.5
+RawOtu$Parr122  <- RawOtu$Parr122*2.5
+RawOtu$Parr107 <- RawOtu$Parr107*2.5
+RawOtu$Parr109 <- RawOtu$Parr109*2.5
+RawOtu$Parr125 <- RawOtu$Parr125*2.5
+RawOtu$Parr111 <- RawOtu$Parr111*2.5
+RawOtu$Parr117 <- RawOtu$Parr117*2.5
+RawOtu$Parr117redo  <- RawOtu$Parr117redo*2.5
+RawOtu$Parr124 <- RawOtu$Parr124*2.5
+RawOtu$DNegParr <- RawOtu$DNegParr*2.5
+RawOtu$ParrNG <- RawOtu$ParrNG*2.5
+RawOtu$Parr118 <- RawOtu$Parr118*2.5
+
+
+
+
+
+##Import into phyloseq
+#otu table
+onlyOTU <- as.matrix(RawOtu)
+otu_sub  <- otu_table(onlyOTU, taxa_are_rows = T)
+#taxnomy strings
+t_tax <- as.matrix(taxmat)
+tax_sub = tax_table(t_tax)
+#mapping file
+metadata <- sample_data(mapping)
+
+##Create phyloseq object
+PhCol<- phyloseq(otu_sub,metadata,tax_sub)
+PhCol <- subset_samples(PhCol, SampleID!="CFN_nema_20")
+PhCol <- subset_samples(PhCol, SampleID!="Parr117")
+PhOnlyneg <- subset_samples(PhCol, Treatment == "Neg")
+PhNoneg <- subset_samples(PhCol, Treatment != "Neg")
+
+PhNoneg
+
+
+
+####### this is nice function because merge samples in phyloseq is bad########
+merge_samples_mean <- function(physeq, group){
+  #Calculate the number of samples in each group
+  group_sums <- as.matrix(table(sample_data(physeq)[ ,group]))[,1]
+  #Merge samples by summing
+  merged <- merge_samples(physeq, group)
+  #Divide summed OTU counts by number of samples in each group to get mean
+  #Calculation is done while taxa are columns, but then transposed at the end
+  x <- as.matrix(otu_table(merged))
+  if(taxa_are_rows(merged)){ x<-t(x) }
+  out <- t(x/group_sums)
+  #Return new phyloseq object with taxa as rows
+  out <- otu_table(out, taxa_are_rows = TRUE)
+  otu_table(merged) <- out
+  return(merged)
+}
+
+
+
+
+
+
+###### Figure 1########
+setwd("~/OneDrive - University of Florida/Grad School/Fall 2022/ColoradoPaperDrafts/morphographs")
+
+##Import into R
+#otu table
+RawOtu <- read.table("otu.csv",sep=",", row.names=1,header=T, check.names=F,blank.lines.skip = FALSE)
+RawOtu <- RawOtu[,order(colnames(RawOtu))]
+#taxnomy strings
+taxmat <- read.table("tax.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+#mapping file 
+mapping <- read.table("map.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+
+
+##Import into phyloseq
+#otu table
+onlyOTU <- as.matrix(RawOtu)
+otu_sub  <- otu_table(onlyOTU, taxa_are_rows = T)
+#taxnomy strings
+t_tax <- as.matrix(taxmat)
+tax_sub = tax_table(t_tax)
+#mapping file
+metadata <- sample_data(mapping)
+
+##Create phyloseq object
+PhCol<- phyloseq(otu_sub,metadata,tax_sub)
+#PhCol <- subset_samples(PhCol, SampleID!="CFN_nema_20")
+#PhCol <- subset_samples(PhCol, SampleID!="Parr117")
+PhNoneg <- subset_samples(PhCol, Treatment != "Neg")
+
+
+
+ps <- PhNoneg
+#ps <- tax_glom(ps, "Feeding")
+ps1 <- merge_samples_mean(ps, "Year_Treat")
+#account for uneven numbersZ
+#ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+dat2 <- data.table(psmelt(ps1))
+# convert Phylum to a character vector from a factor because R
+dat2$Feeding <- as.character(dat2$Feeding)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Feeding"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018low","2018med",  "2018high",  "2019low",  "2019med","2019high", "2020low", "2020med", "2020high", "2021low", "2021med","2021high"
+))
+palette <- c( "#4cc26d", "#DCB274", "#FF6B4E", "#919191", "#8A94D9", "#B6D5D5", "#BA54D9") 
+palette
+
+
+
+#palette <- distinctColorPalette(7)
+
+#put other phyla at top
+dat2$Feeding <- factor(dat2$Feeding, levels = c(
+  
+  "Plant Parasites",
+  "Root Assoicates",
+  "Omnivores",
+  "Fungivores",
+  "Bacterivores"
+))
+
+nopre = c(
+  
+  "Plant Parasites",
+  "Root Associates",
+  "Omnivores/ \nPredators",
+  "Fungivores",
+  "Bacterivores"
+  
+  
+)
+
+Sample <- c(  "2018low","2018med",  "2018high",  "2019low",  "2019med","2019high", "2020low", "2020med", "2020high", "2021low", "2021med","2021high")
+Abundance <- as.numeric(c("2040.9012", "1372.6955", "1414.7405", "698.86843","566.48762", "323.74804", "373.92283", "424.09661", "246.01103", "766", "819.45","1211"))
+Feeding <- c( "Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites","Plant Parasites")
+SD <- as.numeric(c("248.38685", "49.471201", "168.38486", "125.42019","82.28049", "84.907764", "69.666838", "108.15742", "19.778436","87.689644","190.09175","98.075163"))
+err <- data.frame(Sample, Feeding, SD,Abundance)
+
+
+### Plot graph without dots
+edes22 <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Feeding)) + geom_bar( stat = "identity") +  theme_classic(15)  + theme(legend.position="right", axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Total Morphological Nematode Abundance per 100 g dry soil") + labs(fill='Trophic Groups') +  scale_y_continuous(expand = c(0,0))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes22aall <- edes22 +  theme(legend.text=element_text(size=15),axis.ticks = element_blank())+ guides(fill = guide_legend(reverse = TRUE),ncol=4)+  scale_fill_manual(values=palette,labels =nopre)   + scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5'))
+edes22aall <- edes22aall + geom_errorbar(aes(ymin=Abundance-SD, ymax=Abundance+SD), data=err,color="black") +scale_y_continuous(limits = c(0,2500), expand = c(0,0))
+edes22aall  + geom_signif(comparisons = list(c("2018low", "2018high")), annotation="A",linetype=3,tip_length = 0,y_position = c(2300)) +
+  geom_signif(comparisons = list(c("2019low", "2020high")), annotation="C",linetype=3,tip_length = 0,y_position = c(1100)) +
+  geom_signif(comparisons = list(c("2021low", "2021high")), annotation="B",linetype=3,tip_length = 0,y_position = c(1300)) 
+
+#### compare morpho to asv realtive
+edes22aall
+edes22aallL <- get_legend(edes22aall)
+edes22aallL<- as_ggplot(edes22aallL)
+edes22aall <- edes22aall + theme(legend.position = "none") 
+#######Figure 2######
+
+newcolors<- c("#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223")
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperbackup.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("All Nematodes") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + ggtitle("Faith's PD")+ theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.1),limits = c(0,3), expand = c(0,0)) 
+Faithall <- Faith
+Faithall
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperBF.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Bacterivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p  + ggtitle("Faith's PD") + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,1.2), expand = c(0,0))
+FaithBF <- Faith
+FaithBF
+
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperFF.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Fungivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,1.6), expand = c(0,0))
+FaithFF <- Faith
+FaithFF
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperOM.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Omnivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,0.75), expand = c(0,0))
+FaithOM <- Faith
+FaithOM
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperRA.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Root Associates") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,0.8), expand = c(0,0))
+FaithRA <- Faith
+FaithRA
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperPP.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Plant Parasites") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,1), expand = c(0,0))
+FaithPP <- Faith
+FaithPP
+
+Figure2 <- ggarrange(FaithBF,FaithFF,FaithOM, FaithRA,FaithPP, labels = c("A.",  "B.","C.", "D.","E."), ncol = 1, nrow = 5) 
+Figure2
+
+#for talk
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperBF.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Faith's Phylogenetic Diversity") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p  + ggtitle("Bacterivores") + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,1.2), expand = c(0,0))
+FaithBF <- Faith
+FaithBF
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperRA.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Faith's Phylogenetic Diversity") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p +    ggtitle("Root Associates") + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.2),limits = c(0,0.8), expand = c(0,0))
+FaithRA <- Faith
+FaithRA
+
+Figure2 <- ggarrange(FaithRA,FaithBF, ncol = 2, nrow = 1) 
+Figure2
+
+
+
+
+
+#########Figure 3############
+#otu table
+RawOtu <- read.table("otunewnamesy.csv",sep=",", row.names=1,header=T, check.names=F,blank.lines.skip = FALSE)
+RawOtu <- RawOtu[,order(colnames(RawOtu))]
+#taxnomy strings
+taxmat <- read.table("tax.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+#mapping file 
+mapping <- read.table("map_newnames.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+
+##correct for soil moisture
+
+
+
+
+
+##Import into phyloseq
+#otu table
+onlyOTU <- as.matrix(RawOtu)
+otu_sub  <- otu_table(onlyOTU, taxa_are_rows = T)
+#taxnomy strings
+t_tax <- as.matrix(taxmat)
+tax_sub = tax_table(t_tax)
+#mapping file
+metadata <- sample_data(mapping)
+
+##Create phyloseq object
+PhCol<- phyloseq(otu_sub,metadata,tax_sub)
+PhCol <- subset_samples(PhCol, SampleID!="CFN_nema_20")
+PhCol <- subset_samples(PhCol, SampleID!="Parr117")
+PhOnlyneg <- subset_samples(PhCol, Treatment == "Neg")
+PhNoneg <- subset_samples(PhCol, Treatment != "Neg")
+
+RELPhOnlyClean10 <- PhNoneg
+#RELPhOnlyClean10 <- transform(RELPhOnlyClean10, 'log10')
+RELPhOnlyClean10 <- transform_sample_counts(RELPhOnlyClean10, function(x) x / sum(x))
+#wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="bray", weighted=F)
+
+### jacard
+wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="jaccard", binary=TRUE)
+
+
+
+sampleNames(RELPhOnlyClean10)
+
+mice_dist2 <- wunifrac_dist
+allGroupsColors<- c("#EE4524","3AEE24","#ECEE24")
+
+
+allGroupsColors <-c("#EB3223","#b5b5b5", "#4CAEEA")
+
+
+mice_dist2 %>%
+  as.matrix() %>%
+  as_tibble(rownames= "sample") %>%
+  pivot_longer(-sample) %>%
+  filter(sample < name) %>%
+  mutate(animal_a = str_replace(sample, "A.*", ""),
+         animal_b = str_replace(name, "A.*", ""),
+         day_a = as.numeric(str_replace(sample, ".*Z", "")),
+         day_b = as.numeric(str_replace(name, ".*Z", "")),
+         treatworking = str_replace(name, "Z.*", ""),
+         treatment = str_replace(treatworking, ".*A", ""),
+         diff = abs(day_a - day_b),
+         early = day_a < 10) %>%
+  filter(animal_a == animal_b) %>%
+  group_by(diff, animal_a, treatment) %>%
+  summarize(median = median(value)) %>%
+  ungroup() %>%
+  ggplot(aes(x=diff, y=median, color=treatment, group=paste0(animal_a, treatment))) +
+  geom_line(size=0.25) + geom_smooth(aes(group=treatment), se=FALSE, size=4) +
+  theme_classic(20) + labs(x="Years between time points",
+                           y="Median Jaccard distance") +    scale_x_continuous(breaks=1:9)  + scale_color_manual(values = allGroupsColors)  + 
+  theme(legend.position = "none",axis.text.x = element_text(color="black"),axis.text.y = element_text(color="black"),  axis.ticks = element_line(color = "black") )
+
+
+
+##august 9 ecxport
+test <- mice_dist2 %>%
+  as.matrix() %>%
+  as_tibble(rownames= "sample") %>%
+  pivot_longer(-sample) %>%
+  filter(sample < name) %>%
+  mutate(animal_a = str_replace(sample, "A.*", ""),
+         animal_b = str_replace(name, "A.*", ""),
+         day_a = as.numeric(str_replace(sample, ".*Z", "")),
+         day_b = as.numeric(str_replace(name, ".*Z", "")),
+         treatworking = str_replace(name, "Z.*", ""),
+         treatment = str_replace(treatworking, ".*A", ""),
+         diff = abs(day_a - day_b),
+         early = day_a < 10) %>%
+  filter(animal_a == animal_b) %>%
+  group_by(diff, animal_a, treatment) %>%
+  summarize(median = median(value)) %>%
+  ungroup() 
+my_df <- as.data.frame(test)
+
+my_df$diff <-as.factor(my_df$diff)
+m222 <- lm(median ~ treatment*diff, data=my_df)
+anova(m222)
+plot(simulateResiduals(m222))
+emmeans(m222,pairwise~treatment) 
+emmeans(m222,pairwise~diff|treatment) 
+emmeans(m222,pairwise~treatment|diff) 
+emmeans(m222,pairwise~treatment*diff) 
+
+######Figure 4#######
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Feeding")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Feeding <- as.character(dat2$Feeding)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Feeding"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+))
+palette <- c( "#008906", "#DCB274", "#FF6B4E", "#BA54D9", "#747580", "#B6D5D5", "#BA54D9") 
+palette
+
+palette <- c( "#4cc26d", "#DCB274", "#FF6B4E", "#919191", "#8A94D9", "#B6D5D5", "#BA54D9") 
+
+#palette <- distinctColorPalette(7)
+
+#put other phyla at top
+dat2$Feeding <- factor(dat2$Feeding, levels = c(
+  
+  "PP",
+  "RA",
+  "OM",
+  "FF",
+  "BF"
+))
+
+nopre = c(
+  
+  "Plant Parasites",
+  "Root Associates",
+  "Omnivores/Predators",
+  "Fungivores",
+  "Bacterivores"
+  
+  
+)
+
+
+
+### Plot graph without dots
+edes22 <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Feeding)) + geom_bar( stat = "identity") +  theme_classic(15)  + theme(legend.position="right", axis.ticks.x = element_blank(),axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill='Trophic Groups') +  scale_y_continuous(expand = c(0,0))+ theme( legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes22aall <- edes22 +  theme(legend.text=element_text(size=10))+ guides(fill = guide_legend(reverse = TRUE),ncol=3)+  scale_fill_manual(values=palette,labels =nopre)   + scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5'))
+edes22aall
+edes22aallL <- get_legend(edes22aall)
+edes22aallL<- as_ggplot(edes22aallL)
+edes22aall <- edes22aall + theme(legend.position = "none") 
+
+#family or genus relative abudance
+
+#Show Family level
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Family")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+ps2 <- subset_taxa(ps2, Feeding=="BF")
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Family <- as.character(dat2$Family)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Family"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+  
+))
+#palette <- c( "#8A94D9", "#DCB274", "#89DCA6", "#B2E25C", "#E18CB7", "#B6D5D5", "#BA54D9") 
+
+
+palette <- distinctColorPalette(16)
+palette <- c( "#E4A761", "#DCE2C0" ,"#E552A5" ,"#8A9469", "#DCC3D3", "#7C98D6", "#856EDB", "#90CCE0" ,"#D597D7",
+                       "#86E59C", "#D855DD", "#DDE064", "#856EDB", "#80E14F", "#7CE3D0" ,"#86E59C")
+                       #put other phyla at top
+#dat2$Table <- factor(dat2$Table, levels = c(
+#  "Other Eukaryotes", 856EDB856EDB 856EDB
+
+#  "Fungi",
+# "Archaeplastida", 
+#  "Nematode", 
+#  "Metazoans "
+#))
+
+dat2$Family <- factor(dat2$Family, levels = c(
+  "Microlaimidae",
+  "Haliplectidae",
+  "Prismatolaimidae",
+  "Rhabdolaimidae",
+  "Chronogastridae",
+  "Alaimidae",
+  "Monhysteridae",
+  "Panagrolaimidae",
+  "Rhabditidae",
+  "Drilonematidae",
+  "Diplopeltidae",
+  "Plectidae",
+  "Cephalobidae"
+  
+))
+
+
+### Plot graph without dots
+edes2BF <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Family)) + scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5'))+ geom_bar( stat = "identity") +  guides(fill = guide_legend(reverse = TRUE,ncol=3))+  scale_fill_manual(values=palette) + theme_classic(15)  + theme(legend.position="right", axis.ticks.x = element_blank(), axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill="Bacterivore Families") +  scale_y_continuous(expand = c(0,0),labels = scales::number_format(accuracy = 0.01))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes2BF
+edes2BFl <- get_legend(edes2BF)
+edes2BFl<- as_ggplot(edes2BFl)
+edes2BF <- edes2BF + theme(legend.position = "none") 
+
+
+##### OM
+
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Family")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+ps2 <- subset_taxa(ps2, Feeding=="OM")
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Family <- as.character(dat2$Family)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Family"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+  
+))
+#palette <- c( "#8A94D9", "#DCB274", "#89DCA6", "#B2E25C", "#E18CB7", "#B6D5D5", "#BA54D9") 
+
+
+palette <- distinctColorPalette(16)
+palette <- c( "#7ABADB", "#79E6D2", "#70E67A", "#DEAC5C" ,"#69A472", "#D1ABD7", "#9D4DE7", "#D6D9E1", "#C99587" ,"#7E84D8", "#D5DFBE", "#CEE74A", "#DA67D6", "#E06559",
+                       "#D76599", "#C9E28D")
+                       #put other phyla at top
+#dat2$Table <- factor(dat2$Table, levels = c(
+#  "Other Eukaryotes", 
+
+#  "Fungi",
+# "Archaeplastida", 
+#  "Nematode", 
+#  "Metazoans "
+#))
+
+dat2$Family <- factor(dat2$Family, levels = c(
+  "Cryptonchidae",
+  "Diplogasteridae",
+  "Mylonchulidae",
+  "Mydonomidae",
+  "Allantonematidae",
+  "Dorylaimidae",
+  "Odontolaimidae",
+  "Campydoridae",
+  "Qudsianematidae",
+  "Aporcelaimidae",
+  "Nygolaimidae"
+  
+))
+
+### Plot graph without dots
+edes2OM <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Family))  +   scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5'))+  guides(fill = guide_legend(reverse = TRUE,ncol=3))+ geom_bar( stat = "identity") +   scale_fill_manual(values=palette) + theme_classic(15)  + theme(legend.position="right",axis.ticks.x = element_blank(), axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill='Omnivore and Predator Families') +  scale_y_continuous(expand = c(0,0),labels = scales::number_format(accuracy = 0.01))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes2OM
+edes2OMl <- get_legend(edes2OM)
+edes2OMl<- as_ggplot(edes2OMl)
+edes2OM <- edes2OM + theme(legend.position = "none") 
+
+
+## FF
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Family")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+ps2 <- subset_taxa(ps2, Feeding=="FF")
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Family <- as.character(dat2$Family)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Family"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+  
+))
+#palette <- c( "#8A94D9", "#DCB274", "#89DCA6", "#B2E25C", "#E18CB7", "#B6D5D5", "#BA54D9") 
+
+
+palette <- distinctColorPalette(16)
+palette <- c("#81B8DE", "#DAABD9" ,"#6D9E6E", "#D7E648" ,"#A84FE7" ,"#DB64C3", "#7F85DD" ,"#DCD7DC", "#947983", "#CFDF89", "#DD9D5F", "#D4DFBD", "#7BE3DA", "#7AE662"
+                      , "#DE727C", "#74E5A5")
+#put other phyla at top
+#dat2$Table <- factor(dat2$Table, levels = c(
+#  "Other Eukaryotes", 
+
+#  "Fungi",
+# "Archaeplastida", 
+#  "Nematode", 
+#  "Metazoans "
+#))
+
+dat2$Family <- factor(dat2$Family, levels = c(
+  
+  "Diphtherophoridae",
+  "Aphelenchoididae",
+  "Belondiridae",
+  "Anguinidae",
+  "Tylencholaimidae",
+  "Aphelenchidae"
+  
+))
+### Plot graph without dots
+edes2FF <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Family)) +   scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5'))+  guides(fill = guide_legend(reverse = TRUE,ncol=3)) + geom_bar( stat = "identity") +   scale_fill_manual(values=palette) + theme_classic(15)  + theme(legend.position="right", axis.ticks.x = element_blank(), axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill='Fungivore Families') +  scale_y_continuous(expand = c(0,0),labels = scales::number_format(accuracy = 0.01))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes2FF
+edes2FFl <- get_legend(edes2FF)
+edes2FFl<- as_ggplot(edes2FFl)
+edes2FF <- edes2FF + theme(legend.position = "none") 
+
+##PP
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Family")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+ps2 <- subset_taxa(ps2, Feeding=="PP")
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Family <- as.character(dat2$Family)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Family"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+  
+))
+#palette <- c( "#8A94D9", "#DCB274", "#89DCA6", "#B2E25C", "#E18CB7", "#B6D5D5", "#BA54D9") 
+
+
+palette <- distinctColorPalette(16)
+palette <- c( "#D2AAD4", "#D967D0", "#7EBBDD", "#7F83D7" ,"#A44EE8", "#7EE554", "#D9E74B" ,"#DFAA58", "#C8E189", "#DADAB2", "#729C71", "#D6D8DB", "#D3806E" ,"#DC6391",
+                       "#7DE5D3", "#70E695")
+                       #put other phyla at top
+#dat2$Table <- factor(dat2$Table, levels = c(
+#  "Other Eukaryotes", 
+
+#  "Fungi",
+# "Archaeplastida", 
+#  "Nematode", 
+#  "Metazoans "
+#))
+
+
+dat2$Family <- factor(dat2$Family, levels = c(
+  
+  "Merliniidae",
+  "Criconematidae",
+  "Hoplolaimidae",
+  "Longidoridae",
+  "Aphelenchoididae",
+  "Anguinidae",
+  "Pratylenchidae",
+  "Dolichodoridae"
+  
+))
+
+### Plot graph without dots
+edes2PP <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Family)) + scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5')) +  guides(fill = guide_legend(reverse = TRUE,ncol=3)) + geom_bar( stat = "identity") +   scale_fill_manual(values=palette) + theme_classic(15)  + theme(legend.position="right", axis.ticks.x = element_blank(), axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill='Plant Parasitic Families') +  scale_y_continuous(expand = c(0,0))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15))
+edes2PP
+edes2PPl <- get_legend(edes2PP)
+edes2PPl<- as_ggplot(edes2PPl)
+edes2PP <- edes2PP + theme(legend.position = "none") 
+
+##RA
+ph4 <- PhNoneg
+ps<- transform_sample_counts(ph4, function(x) x / sum(x))
+ps <- tax_glom(ps, "Genus")
+ps2 <- transform_sample_counts(ps, function(x) x / sum(x))
+plot_bar(ps2)
+ps1 <- merge_samples(ps2, "YearTreatment")
+#account for uneven numbersZ
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+ps2 <- subset_taxa(ps2, Feeding=="RA")
+dat2 <- data.table(psmelt(ps2))
+# convert Phylum to a character vector from a factor because R
+dat2$Genus <- as.character(dat2$Genus)
+# group dataframe by Phylum, calculate median rel. abundance
+dat2[, median := median(Abundance, na.rm = TRUE), 
+     by = "Genus"]
+# Change name to remainder of Phylum less than 1%
+
+
+dat2$Sample <- factor(dat2$Sample, levels = c(
+  "2018 Low","2018 Med",  "2018 High",  "2019 Low",  "2019 Med","2019 High", "2020 Low", "2020 Med", "2020 High", "2021 Low", "2021 Med","2021 High"
+  
+))
+#palette <- c( "#8A94D9", "#DCB274", "#89DCA6", "#B2E25C", "#E18CB7", "#B6D5D5", "#BA54D9") 
+
+
+palette <- distinctColorPalette(16)
+#palette <- c("#D2AAD4", "#D967D0","#7EBBDD", "#7F83D7", "#A44EE8" ,"#7EE554", "#D9E74B", "#DFAA58", "#C8E189", "#DADAB2", "#729C71", "#D6D8DB", "#D3806E" ,"#DC6391",
+#       "#7DE5D3", "#70E695")
+#put other phyla at top
+#dat2$Table <- factor(dat2$Table, levels = c(
+#  "Other Eukaryotes", 
+
+#  "Fungi",
+# "Archaeplastida", 
+#  "Nematode", 
+#  "Metazoans "
+#))
+
+dat2$Genus <- factor(dat2$Genus, levels = c(
+  
+  "Psilenchus",
+  "unknown_genus",
+  "Irantylenchus",
+  "Tylenchus",
+  "Coslenchus",
+  "Basiria",
+  "Boleodorus",
+  "Neopsilenchus",
+  "Filenchus"
+  
+))
+
+
+nopre = c(
+  
+  expression(italic("Psilenchus")), 
+  "Unknown Genus", 
+  expression(italic("Irantylenchus")), 
+  expression(italic("Tylenchus")), 
+  expression(italic("Coslenchus")), 
+  expression(italic("Basiria")), 
+  expression(italic("Boleodorus")), 
+  expression(italic("Neopsilenchus")), 
+  expression(italic("Filenchus"))
+  
+)
+
+### Plot graph without dots
+edes2ra <- ggplot(dat2, aes(x = Sample, y = Abundance,fill = Genus))+   scale_x_discrete(labels = c('0','2', '5', '0', '2', '5','0','2', '5', '0', '2', '5')) + guides(fill = guide_legend(reverse = TRUE,ncol=3)) + geom_bar( stat = "identity") +   scale_fill_manual(values=palette,labels =nopre) + theme_classic(15)  + theme(legend.position="right",axis.ticks.x = element_blank(),  axis.title.x=element_blank(),axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black")  )+ ylab("Relative Abundance") + labs(fill='Root Associate Genera') +  scale_y_continuous(expand = c(0,0))+ theme(legend.text = element_text(size=10), legend.title = element_text(size=15), axis.text.x = element_text(angle = 0, vjust = 0.5))
+edes2ra <- edes2ra + theme(legend.text.align = 0)
+edes2ra
+edes2ral <- get_legend(edes2ra)
+edes2ral<- as_ggplot(edes2ral)
+edes2ra <- edes2ra + theme(legend.position = "none") 
+
+
+
+edes22aall
+
+Figure2 <- ggarrange(edes22aall,edes2BF,edes2FF,edes2OM, edes2ra, edes2PP,labels = c("A.",  "B.","C.",
+                                                                                     "D.","E.","F."), ncol = 1, nrow = 6)
+Figure2L <- ggarrange(edes22aallL, edes2BFl, edes2FFl, edes2OMl, edes2ral, edes2PPl, ncol = 1, nrow = 6)
+Figure2Final <- ggarrange(Figure2,Figure2L,ncol = 2, nrow = 1 )
+Figure2Final
+
+
+
+Figure2 <- ggarrange(edes2BF,edes2FF,edes2OM, edes2ra, edes2PP,labels = c("A.",  "B.","C.",
+                                                                          "D.","E."), ncol = 1, nrow = 5)
+Figure2L <- ggarrange(edes2BFl, edes2FFl, edes2OMl, edes2ral, edes2PPl, ncol = 1, nrow = 5)
+Figure2Final <- ggarrange(Figure2,Figure2L,ncol = 2, nrow = 1 )
+Figure2Final
+
+
+######## Figure 5##########
+
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+
+ninja <- read.csv("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase/NinjarforR.csv")
+#head(ninja)
+
+ninja$YearTreatment <- factor(ninja$YearTreatment,levels = c( "2018 Low",  "2018 Med","2018 High", "2019 Low",  "2019 Med","2019 High","2020 Low",  "2020 Med","2020 High","2021 Low",  "2021 Med","2021 High" ))
+
+newcolors <- c("#b5b5b5", "#4CAEEA","#EB3223", "#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223")
+p <- ggplot(ninja, aes(x=YearTreatment, y=MaturityIndex,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Maturity") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+MI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(1.7,3.5), expand = c(0,0))
+MI
+
+p <- ggplot(ninja, aes(x=YearTreatment, y=BasalIndex,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Basal") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+BI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,50), expand = c(0,0))
+BI
+
+ninja$ReverseBasal <- 100-ninja$BasalIndex
+p <- ggplot(ninja, aes(x=YearTreatment, y=ReverseBasal,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Reverse Basal") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+BI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(50,100), expand = c(0,0))
+BI
+
+
+
+p <- ggplot(ninja, aes(x=YearTreatment, y=ChannelIndex,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Channel") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+CI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,100), expand = c(0,0))
+CI
+
+
+p <- ggplot(ninja, aes(x=YearTreatment, y=EnrichmentIndex,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Enrichment") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+EI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,100), expand = c(0,0))
+EI
+
+p <- ggplot(ninja, aes(x=YearTreatment, y=StructureIndex,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Structure") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+SI <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(40,100), expand = c(0,0))
+SI
+
+
+Figure2222 <- ggarrange(MI,EI,SI,BI,labels = c("A.",  "B.","C.", "D."), ncol = 2, nrow = 2)
+Figure2222
+
+#for talk
+Figure2222 <- ggarrange(EI,SI,BI, ncol = 3, nrow = 1)
+Figure2222
+
+
+############ Figure 6 ###########
+ps1 <- transform_sample_counts(PhNoneg, function(x) x / sum(x))
+
+
+nodess <- c("22d3fc5f9221f6cbafb23395703a410b")
+
+highccolors <- c("#919191","#919191","#919191","#FF6B4E","#919191","#8A94D9", "#FF6B4E","#8A94D9", "#4cc26d","#4cc26d","#FF6B4E","#FF6B4E","#FF6B4E","#8A94D9",
+                          "#8A94D9","#4cc26d","#8A94D9","#FF6B4E","#8A94D9","#4cc26d","#DCB274","#919191")
+                          
+high <- co_occurrence_network(ps1, treatment = "Treatment", subset = "High",
+                              classification = "Family", co_occurrence_table = NULL, layout = NULL,
+                              nodes_of_interest = nodess, node_colors = highccolors,
+                              cluster = FALSE, cluster_colors = 'default', buffer = 0.5) + theme(plot.title = element_blank(),legend.position="none") + 
+  scale_fill_manual(values = highccolors , aesthetics = "fill")
+high
+
+
+
+
+palette <- c( "#4cc26d", "#DCB274", "#FF6B4E", "#919191", "#8A94D9") 
+medccolors <- c("#8A94D9","#919191","#919191","#919191","#FF6B4E","#919191","#8A94D9", "#FF6B4E","#8A94D9","#4cc26d","#4cc26d","#FF6B4E","#FF6B4E","#FF6B4E","#8A94D9",
+                         "#8A94D9","#4cc26d","#8A94D9","#FF6B4E","#8A94D9","#8A94D9","#4cc26d","#DCB274","#919191"  )
+                         med <- co_occurrence_network(ps1, treatment = "Treatment", subset = "Med",
+                                                      classification = "Family", co_occurrence_table = NULL, layout = NULL,
+                                                      nodes_of_interest = NULL, node_colors = 'default',
+                                                      cluster = FALSE, cluster_colors = 'default', buffer = 0.5) + theme(plot.title = element_blank(),legend.position="none") +scale_fill_manual(values = medccolors , aesthetics = "fill")
+                         
+                         med
+lowccolors <- c("#8A94D9","#FF6B4E","#4cc26d","#919191","#919191","#FF6B4E","#919191","#FF6B4E",
+                                                  "#8A94D9", "#919191","#8A94D9","#FF6B4E","#8A94D9","#4cc26d","#FF6B4E","#FF6B4E","#8A94D9",
+                                                  "#8A94D9","#8A94D9","#FF6B4E","#8A94D9","#4cc26d","#4cc26d","#DCB274","#DCB274","#919191"  )
+low <- co_occurrence_network(ps1, treatment = "Treatment", subset = "Low",
+                                                                               classification = "Family", co_occurrence_table = NULL, layout = NULL,
+                                                                               nodes_of_interest = NULL, node_colors = 'default',
+                                                                               cluster = FALSE, cluster_colors = 'default', buffer = 0.5) + theme(plot.title = element_blank(),legend.position="none")+scale_fill_manual(values = lowccolors , aesthetics = "fill")
+                                                  
+                                                  low
+                                                  
+                                                  
+                                                  
+  figure <- ggarrange(low,med,high,labels = c("A.",  "B.", "C."), ncol = 3, nrow = 1)
+                                                  figure
+                                                  
+newcolors <- c("#b5b5b5", "#4CAEEA","#EB3223")
+#Degree
+DegreeSum <- read.csv("~/OneDrive - University of Florida/Grad School/Spring 2023/network/degreesum.csv")
+DegreeSum
+DegreeSum$Treat <- as.factor(DegreeSum$Treat)
+DegreeSum$Treat <- factor(DegreeSum$Treat, levels = c(
+  
+  "0",
+  "2",
+  "5"
+))
+p <- ggplot(DegreeSum, aes(x=Treat, y=Degree,fill = Treat))  +  geom_col(position = "dodge") + theme_classic(15) +scale_y_continuous(expand = c(0,0)) + scale_fill_manual(values = newcolors) 
+Treat <- c("0", "2", "5")
+Degree <- as.numeric(c("0.0383053", "0.0425430", "0.0501250"))
+SD <- as.numeric(c("0.0012415", "0.0022710", "0.0030466"))
+err <- data.frame(Treat, SD,Degree)
+Degreegraph <- p + geom_errorbar(aes(ymin=Degree-SD, ymax=Degree+SD), data=err,color="black",width=0.6)+ theme(axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black"))
+Degreegraph <- Degreegraph + labs(y= "Degrre (Normalied)") +theme(legend.position = "none",axis.title.x = element_blank())
+Degreegraph
+
+
+
+#Degree
+DegreeSum <- read.csv("~/OneDrive - University of Florida/Grad School/Spring 2023/network/degreerealsum.csv")
+DegreeSum
+DegreeSum$Treat <- as.factor(DegreeSum$Treat)
+DegreeSum$Treat <- factor(DegreeSum$Treat, levels = c(
+  
+  "0",
+  "2",
+  "5"
+))
+p <- ggplot(DegreeSum, aes(x=Treat, y=Degree,fill = Treat))  +  geom_col(position = "dodge") + theme_classic(15) +scale_y_continuous(expand = c(0,0)) + scale_fill_manual(values = newcolors) 
+Treat <- c("0", "2", "5")
+Degree <- as.numeric(c("7.0865", "7.2650", "10.0250"))
+SD <- as.numeric(c("0.3400", "0.3888", "0.6000"))
+err <- data.frame(Treat, SD,Degree)
+Degreegraph <- p + geom_errorbar(aes(ymin=Degree-SD, ymax=Degree+SD), data=err,color="black",width=0.6)+ theme(axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black"))
+Degreegraph <- Degreegraph + labs(y= "Degree") +theme(legend.position = "none",axis.title.x = element_blank())
+Degreegraph
+
+
+
+#complexity
+ComplexitySum <- read.csv("~/OneDrive - University of Florida/Grad School/Spring 2023/network/Complexitysum.csv")
+ComplexitySum
+ComplexitySum$Treat <- as.factor(ComplexitySum$Treat)
+ComplexitySum$Treat <- factor(ComplexitySum$Treat, levels = c(
+  
+  "0",
+  "2",
+  "5"
+))
+p <- ggplot(ComplexitySum, aes(x=Treat, y=Complexity,fill = Treat))  +  geom_col(position = "dodge") + theme_classic(15) +scale_y_continuous(expand = c(0,0)) + scale_fill_manual(values = newcolors) 
+Treat <- c("0", "2", "5")
+Complexity <- as.numeric(c("0.0380994", "0.0422957", "0.0498756"))
+SD <- as.numeric(c("0.0012415", "0.0022578", "0.0030315"))
+err <- data.frame(Treat, SD,Complexity)
+complexitygraph <- p + geom_errorbar(aes(ymin=Complexity-SD, ymax=Complexity+SD), data=err,color="black",width=0.6)+ theme(axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black"))
+complexitygraph <- complexitygraph + theme(legend.position = "none",axis.title.x = element_blank())
+complexitygraph
+
+### centet
+CenterSum <- read.csv("~/OneDrive - University of Florida/Grad School/Spring 2023/network/center.csv")
+CenterSum
+CenterSum$Treat <- as.factor(CenterSum$Treat)
+CenterSum$Treat <- factor(CenterSum$Treat, levels = c(
+  
+  "0",
+  "2",
+  "5"
+))
+p <- ggplot(CenterSum, aes(x=Treat, y=degree_centralization,fill = Treat))  +  geom_col(position = "dodge") + theme_classic(15) +scale_y_continuous(expand = c(0,0)) + scale_fill_manual(values = newcolors) 
+Centergraph <- p + theme(axis.text.x = element_text(color="black", margin = margin(t = 2)),axis.text.y = element_text(color="black"))
+Centergraph <- Centergraph + labs(y= "Centralization") +theme(legend.position = "none",axis.title.x = element_blank())
+Centergraph
+
+
+networkgrah <- ggarrange(Degreegraph,complexitygraph, Centergraph, labels = c("B.",  "C.", "D."), ncol = 3, nrow = 1)
+networkgrah
+
+final <- ggarrange(figure,networkgrah, ncol = 1, nrow = 2,heights = c(1.2, 0.7))
+final
+
+####### SI Figure 2######
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+AlphaForPhilNoUncultWithMetadata <- read.csv("Alphastatsallcopy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+newcolors<- c("#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223")
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Shannon Diversity") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.1), limits = c(0,32), expand = c(0,0))
+Shannon <-Shannon +  geom_signif(comparisons = list(c("2018Low", "2018High")), annotation="A",linetype=3,tip_length = 0,y_position = c(28))   + geom_signif(comparisons = list(c("2019Low", "2020High")), annotation="AB",linetype=3,tip_length =  0 ,y_position = c(21)) +    geom_signif(comparisons = list(c("2021Low", "2021High")), annotation="B",linetype=3,tip_length = 0,y_position = c(19)) 
+Shannon
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Richness") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,100), expand = c(0,0))
+Richness <- Richness + geom_signif(comparisons = list(c("2018Low", "2018High")), annotation="A",linetype=3,tip_length = 0,y_position = c(85))   + geom_signif(comparisons = list(c("2019Low", "2021High")), annotation="B",linetype=3,tip_length = 0,y_position = c(75)) 
+Richness
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperbackup.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+p <- ggplot(alphadata, aes(x=YearTreatment, y=faith,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Faith's PD") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Faith <- p + theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(labels = label_number(accuracy = 0.1),limits = c(1.5,3.2), expand = c(0,0))
+Faithall <- Faith +  geom_signif(comparisons = list(c("2018Low", "2018High")), annotation="A",linetype=3,tip_length = 0,y_position = c(2.9))   + geom_signif(comparisons = list(c("2019Low", "2019High")), annotation="B",linetype=3,tip_length = 0,y_position = c(2.6)) 
+Faithall <- Faithall + geom_signif(comparisons = list(c("2021Low", "2021High")), annotation="A",linetype=3,tip_length = 0,y_position = c(2.9))   + geom_signif(comparisons = list(c("2020Low", "2020High")), annotation="AB",linetype=3,tip_length = 0,y_position = c(2.8)) 
+Faithall
+SIFigure2 <- ggarrange(Faithall, Shannon, Richness,ncol = 1, nrow = 3,labels = c("A.",  "B.","C."))
+SIFigure2
+
+######  SI Figure 3 and SI Figure 4 ########
+newcolors<- c("#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223","#b5b5b5", "#4CAEEA","#EB3223")
+## BF
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsBFcopy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Bacterivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,14), expand = c(0,0))
+ShannonBF <-Shannon + ggtitle("Shannon Diversity") + theme(plot.title = element_text(hjust = 0.5))
+ShannonBF
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Bacterivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p + ggtitle("Richness")+ theme(legend.position="none",plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,35), expand = c(0,0))
+RichnessBF <- Richness
+RichnessBF
+
+## FF
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsFFcopy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Fungivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,12), expand = c(0,0))
+ShannonFF <-Shannon  + theme(plot.title = element_text(hjust = 0.5))
+ShannonFF
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Fungivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,20), expand = c(0,0))
+RichnessFF <- Richness
+RichnessFF
+
+#OM
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsOM copy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Omnivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,8), expand = c(0,0))
+ShannonOM <-Shannon   + theme(plot.title = element_text(hjust = 0.5))
+ShannonOM
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Omnivores") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p+ theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,14), expand = c(0,0))
+RichnessOM <- Richness
+RichnessOM
+
+#RA
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsRA copy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Root Associates") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,14), expand = c(0,0))
+ShannonRA <-Shannon  + theme(plot.title = element_text(hjust = 0.5))
+ShannonRA
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Root Associates") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,22), expand = c(0,0))
+RichnessRA <- Richness
+RichnessRA
+
+
+
+#PP
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsPP copy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$YearTreatment <- factor(alphadata$YearTreatment,levels = c( "2018Low",  "2018Med","2018High", "2019Low",  "2019Med","2019High","2020Low",  "2020Med","2020High","2021Low",  "2021Med","2021High" ))
+
+p <- ggplot(alphadata, aes(x=YearTreatment, y=shan,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Plant Parasites") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Shannon <- p + theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,6), expand = c(0,0))
+ShannonPP <-Shannon  + theme(plot.title = element_text(hjust = 0.5))
+ShannonPP
+p <- ggplot(alphadata, aes(x=YearTreatment, y=rich,fill=YearTreatment ))  + geom_boxplot(color = "black")
+p <- p +theme_classic(20) + ylab("Plant Parasites") + theme(axis.title.x=element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )
+Richness <- p+ theme(legend.position="none") + scale_fill_manual(values=newcolors)  +scale_x_discrete(labels = c(' ','2018', ' ',' ','2019', ' ',' ','2020', ' ',' ','2021', ' '))  +scale_y_continuous(limits = c(0,10), expand = c(0,0))
+RichnessPP <- Richness
+RichnessPP
+
+#new new just shannon
+SIFigure4 <- ggarrange(ShannonBF,ShannonFF,ShannonOM, ShannonRA,ShannonPP, labels = c("A.",  "B.","C.", "D.","E."), ncol = 1, nrow = 5) 
+SIFigure4
+
+SIFigure3 <- ggarrange(RichnessBF,RichnessFF,RichnessOM, RichnessRA,RichnessPP, labels = c("A.",  "B.","C.", "D.","E."), ncol = 1, nrow = 5) 
+SIFigure3
+
+
+
+############ SI Figure 5 and 6############ 
+#Ordindate in Phyloseq
+RELPhOnlyClean10 <- PhNoneg
+RELPhOnlyClean10 <- transform_sample_counts(RELPhOnlyClean10, function(x) x / sum(x))
+#Subset if needed
+#RELPhOnlyClean10 <- subset_taxa(RELPhOnlyClean10, Feeding=="OM") 
+RELPhOnlyClean10 <-prune_samples(sample_sums(RELPhOnlyClean10)>0, RELPhOnlyClean10)
+
+#Bray Curtis
+wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="bray", weighted=F)
+ordination = ordinate(RELPhOnlyClean10, method="NMDS", distance=wunifrac_dist)
+
+#Extract from Phyloseq
+sampledf <- data.frame(sample_data(RELPhOnlyClean10))
+sc <- vegan::scores(ordination)
+sc <- as.data.frame(sc)
+sampledf$PCoA1 <-sc$NMDS1
+sampledf$PCoA2 <-sc$NMDS2
+head(sampledf)
+
+#Pull Centroids
+m <- betadisper(wunifrac_dist, sampledf$TreatYear)
+centroids16 <- as.data.frame(m$centroids[,1:2])
+centroids16$Treatment <- as.factor(c("High","High","High","High","Low","Low","Low","Low","Med","Med","Med","Med"))
+centroids16$Year2 <- as.factor(c("2018 .","2019 .","2020 .","2021 .","2018 .","2019 .","2020 .","2021 .","2018 .","2019 .","2020 .","2021 ."))
+
+#Plot
+allGroupsColors<- c("#EE4524","#3AEE24","#ECEE24")
+##needs to go in high low med order because albeticial 
+allGroupsColors<- c( "#EB3223" ,"#b5b5b5","#4CAEEA")
+plotbetabray<-ggplot() +
+  geom_point(data = sampledf,
+             aes(x = PCoA1, y = PCoA2, shape = Year2, color = Treatment),
+             size = 5 , alpha = 0.3)   +
+  geom_point(data = centroids16,
+             aes(x = PCoA1, y = PCoA2, shape = Year2, color = Treatment),
+             size = 5) +scale_color_manual(values = allGroupsColors) + scale_shape_manual(values=c(11,15, 16, 17)) +   labs(x = "NMDS1", y = "NMDS2") +
+  theme_classic(15)+ geom_point(size=7)+ theme(legend.position="none", axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") ) + xlim(-0.45,0.45) + ylim(-0.45,0.45)
+plotbetabray
+
+#Jaccard
+wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="jaccard", binary=TRUE)
+ordination = ordinate(RELPhOnlyClean10, method="NMDS", distance=wunifrac_dist)
+#Extract from Phyloseq
+sampledf <- data.frame(sample_data(RELPhOnlyClean10))
+sc <- vegan::scores(ordination)
+sc <- as.data.frame(sc)
+sampledf$PCoA1 <-sc$NMDS1
+sampledf$PCoA2 <-sc$NMDS2
+#Pull Centroids
+m <- betadisper(wunifrac_dist, sampledf$TreatYear)
+centroids16 <- as.data.frame(m$centroids[,1:2])
+centroids16$Treatment <- as.factor(c("High","High","High","High","Low","Low","Low","Low","Med","Med","Med","Med"))
+centroids16$Year2 <- as.factor(c("2018 .","2019 .","2020 .","2021 .","2018 .","2019 .","2020 .","2021 .","2018 .","2019 .","2020 .","2021 ."))
+centroids16$Year2 <- factor(centroids16$Time, levels = c("2018 .","2019 .","2020 .","2021 ."))
+#Plot
+plotbetajaccard<-ggplot() +
+  geom_point(data = sampledf,
+             aes(x = PCoA1, y = PCoA2, shape = Year2, color = Treatment),
+             size = 3, alpha = 0.3)  +
+  geom_point(data = centroids16,
+             aes(x = PCoA1, y = PCoA2, shape = Year2, color = Treatment),
+             size = 5) +scale_color_manual(values = allGroupsColors) + scale_shape_manual(values=c(11,15, 16, 17)) +   labs(x = "NMDS1", y = "NMDS2") +
+  theme_classic(15)+ geom_point(size=7)+ theme(legend.position="none", axis.text.x = element_text(color="black"), axis.text.y = element_text(color="black") )+ xlim(-0.45,0.45) + ylim(-0.45,0.45)
+plotbetajaccard
+
+betafigureOM <- ggarrange(plotbetajaccard,plotbetabray, labels = c("A.",  "B."), ncol = 2, nrow = 1)
+betafigureOM
+
+
+figure <- ggarrange(betafigureBF,betafigureFF,betafigureOM , ncol = 1, nrow = 3)
+figure
+
+
+
+
+
+
+
+
+
+######Statistics#### 
+#### Alpha Diversity and Nematode Indices####
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+#FINAL WITH PHIl August 3 bekow
+AlphaForPhilNoUncultWithMetadata <- read.csv("Alphastatsallcopy.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsBFcopy.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsFFcopy.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsRA copy.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsOM copy.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("AlphastatsPP copy.csv")
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$rounded <-round(alphadata$CountDrySoil, 0)
+#### this is the one, still simulate resitidnals from the other code,
+alphadata$Year2 <- as.factor(alphadata$Year2)
+alphadata$Treatment <- as.factor(alphadata$Treatment)
+
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperbackup.csv")
+AlphaForPhilNoUncultWithMetadata <- read.csv("HillNumberscoloradopaperPP.csv")
+
+THIS IS IN PAPER PAPERPAPER
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+
+AlphaForPhilNoUncultWithMetadata <- read.csv("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase/NinjarforR.csv")
+alphadata <-AlphaForPhilNoUncultWithMetadata
+#testing
+MaturityIndex
+PlantParasiticIndex
+ChannelIndex
+BasalIndex
+EnrichmentIndex
+StructureIndex
+
+# 3 most important
+hist(alphadata$MaturityIndex)
+hist(alphadata$EnrichmentIndex)
+hist(alphadata$StructureIndex)
+hist(alphadata$BasalIndex)
+hist(alphadata$ChannelIndex)
+hist(alphadata$faith)
+
+##PPI and CI are intersting dist
+#hist(alphadata$PlantParasiticIndex)
+
+
+
+res <- residuals(m2)
+plot(res)
+
+alphadata$Year2 <- as.factor(alphadata$Year2)
+alphadata$Treatment <- as.factor(alphadata$Treatment)
+
+
+m2<- lm(MaturityIndex ~ Treatment*Year2+Seed,data =alphadata)
+m2<- lm(rich ~ Treatment*Year2+Seed,data =alphadata)
+m2<- lm(faith ~ Treatment*Year2+Seed,data =alphadata)
+anova(m2)
+summary(m2)
+emmeans(m2,pairwise~Year2,type="response") 
+emmeans(m2,pairwise~Treatment,type="response")
+emmeans(m2,pairwise~Treatment|Year2,type="response") 
+
+
+
+plot(simulateResiduals(m2))
+cld(m2)
+
+g1 <- glht(m2, mcp(Year2 = "Tukey"))
+cld(g1)
+
+alphadatasub <- alphadata
+alphadatasub <- subset(alphadata, Year=="2021")
+alphadatasub$YearTreatment <- as.factor(alphadatasub$YearTreatment)
+#m2<- glmmTMB(rich ~ YearTreatment+Seed,data =alphadatasub,family = nbinom2())
+m2<- lm(EnrichmentIndex ~ YearTreatment+Seed,data =alphadatasub)
+m2<- lm(faith ~ YearTreatment+Seed,data =alphadatasub)
+Anova(m2)
+g1 <- glht(m2, mcp(YearTreatment = "Tukey"))
+cld(g1)
+
+
+##Relative Abundance###########
+
+### august 30
+#run this once
+##this is final in paper paper paper sep 12
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+RawOtu <- read.table("otu.csv",sep=",", row.names=1,header=T, check.names=F,blank.lines.skip = FALSE)
+RawOtu <- RawOtu[,order(colnames(RawOtu))]
+taxmat <- read.table("tax.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+taxmat <- read.table("taxfixdatabaseDolichodoridae.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+mapping <- read.table("map.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+onlyOTU <- as.matrix(RawOtu)
+otu_sub  <- otu_table(onlyOTU, taxa_are_rows = T)
+t_tax <- as.matrix(taxmat)
+tax_sub = tax_table(t_tax)
+metadata <- sample_data(mapping)
+PhCol<- phyloseq(otu_sub,metadata,tax_sub)
+PhCol <- subset_samples(PhCol, SampleID!="CFN_nema_20")
+#PhCol <- subset_samples(PhCol, Year=="2021")
+PhCol <- subset_samples(PhCol, SampleID!="Parr117")
+PhNoneg <- subset_samples(PhCol, Treatment != "Neg")
+
+RELPhOnlyClean10 <- transform_sample_counts(PhNoneg, function(x) x / sum(x))
+
+
+#relativeabundtstats <- tax_glom(RELPhOnlyClean10, "Feeding")
+#relativeabundtstats <- tax_glom(RELPhOnlyClean10, "Family")
+relativeabundtstats <- tax_glom(RELPhOnlyClean10, "Genus")
+relativeabundtstats2 <- transform_sample_counts(relativeabundtstats, function(x) x / sum(x))
+#why was this data and not dat2??!??
+dat2 <- data.table(psmelt(relativeabundtstats2))
+
+
+#write.csv(dat2,'exportwhatpercent.csv')
+#RELPhOnlyClean10 <- tax_glom(RELPhOnlyClean10, "Family")
+#RELPhOnlyClean10 <- subset_taxa(RELPhOnlyClean10, Feeding=="FF")
+#dat2 <- data.table(psmelt(RELPhOnlyClean10))
+
+
+
+dat2$sample_Sample <- as.numeric(dat2$sample_Sample)
+
+#MAKE SURE USE THIS TRANSFORAMTION!!!
+dat2$Abundance <- (dat2$Abundance*(length(dat2$Abundance)-1)+.5)/length(dat2$Abundance)
+
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Family=="Tylencholaimidae"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Tylencholaimus"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Family=="Aphelenchidae"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Ditylenchus"),family=beta_family(link="logit"))
+Dorylaimidae 
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Family=="Qudsianematidae"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Family=="Dolichodoridae"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Tylenchorhynchus"),family=beta_family(link="logit"))
+
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Acrobeloides"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Acrobeles"),family=beta_family(link="logit"))
+m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Genus=="Paraphelenchus"),family=beta_family(link="logit"))
+#m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Family=="Plectidae"),family=beta_family(link="logit"))
+#m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed+offset(log(Countdrysoil)),data=dat2%>%filter(Feeding=="FF"),family=beta_family(link="logit"))#why was this alpah dataa? nbion2 is only counts?
+
+#m2<- glmmTMB( Abundance ~ Treatment*Year2+Seed,data=dat2%>%filter(Feeding=="OM"),family=beta_family(link="logit"))#why was this alpah dataa? nbion2 is only counts?
+Anova(m2)
+emmeans(m2,pairwise~Year2,type="response") 
+emmeans(m2,pairwise~Treatment,type="response")
+emmeans(m2,pairwise~Treatment|Year2,type="response") 
+#emmeans(m2,pairwise~Treatment|Year2) 
+plot(simulateResiduals(m2))
+
+write.csv(dat2,'howmanyomni.csv')
+
+
+write.csv(dat2,'howmanyFF.csv')
+
+
+########## Beta Diversity####
+RELPhOnlyClean10 <- PhNoneg
+#RELPhOnlyClean10 <- transform(RELPhOnlyClean10, 'log10')
+RELPhOnlyClean10 <- transform_sample_counts(RELPhOnlyClean10, function(x) x / sum(x))#turn this off for jaccard
+RELPhOnlyClean10 <- subset_taxa(RELPhOnlyClean10, Feeding=="OM") 
+RELPhOnlyClean10 <-prune_samples(sample_sums(RELPhOnlyClean10)>0, RELPhOnlyClean10)
+#wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="jaccard", binary=TRUE)
+wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="bray", weighted=F)
+ordination = ordinate(RELPhOnlyClean10, method="NMDS", distance=wunifrac_dist)
+
+allGroupsColors<- c("#EE4524","3AEE24","#ECEE24")
+plotbeta <- plot_ordination(RELPhOnlyClean10, ordination, color = "Treatment", shape="Year2") + theme_classic(30) + geom_point(size=7)
+plotbeta + scale_color_manual(values = allGroupsColors) 
+
+sampledf <- data.frame(sample_data(RELPhOnlyClean10))
+adonis( wunifrac_dist  ~ Treatment*Year2+Seed, data = sampledf, permutations = 9999)
+
+pairwise.adonis2( wunifrac_dist  ~ Treatment*Year2+Seed, data = sampledf, permutations = 9999)
+
+pairwise.adonis2( wunifrac_dist  ~ TreatYear+Seed, data = sampledf, permutations = 9999)
+
+
+
+###Median Jaccard distance#####
+#otu table
+RawOtu <- read.table("otunewnamesy.csv",sep=",", row.names=1,header=T, check.names=F,blank.lines.skip = FALSE)
+RawOtu <- RawOtu[,order(colnames(RawOtu))]
+#taxnomy strings
+taxmat <- read.table("tax.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+#mapping file 
+mapping <- read.table("map_newnames.csv",sep=",", header=T,  row.names=1, check.names=F,blank.lines.skip = FALSE)
+
+##correct for soil moisture
+
+
+
+
+
+##Import into phyloseq
+#otu table
+onlyOTU <- as.matrix(RawOtu)
+otu_sub  <- otu_table(onlyOTU, taxa_are_rows = T)
+#taxnomy strings
+t_tax <- as.matrix(taxmat)
+tax_sub = tax_table(t_tax)
+#mapping file
+metadata <- sample_data(mapping)
+
+##Create phyloseq object
+PhCol<- phyloseq(otu_sub,metadata,tax_sub)
+PhCol <- subset_samples(PhCol, SampleID!="CFN_nema_20")
+PhCol <- subset_samples(PhCol, SampleID!="Parr117")
+PhOnlyneg <- subset_samples(PhCol, Treatment == "Neg")
+PhNoneg <- subset_samples(PhCol, Treatment != "Neg")
+
+RELPhOnlyClean10 <- PhNoneg
+#RELPhOnlyClean10 <- transform(RELPhOnlyClean10, 'log10')
+RELPhOnlyClean10 <- transform_sample_counts(RELPhOnlyClean10, function(x) x / sum(x))
+#wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="bray", weighted=F)
+
+### jacard
+wunifrac_dist = phyloseq::distance(RELPhOnlyClean10, method="jaccard", binary=TRUE)
+
+
+
+##august 9 ecxport
+test <- mice_dist2 %>%
+  as.matrix() %>%
+  as_tibble(rownames= "sample") %>%
+  pivot_longer(-sample) %>%
+  filter(sample < name) %>%
+  mutate(animal_a = str_replace(sample, "A.*", ""),
+         animal_b = str_replace(name, "A.*", ""),
+         day_a = as.numeric(str_replace(sample, ".*Z", "")),
+         day_b = as.numeric(str_replace(name, ".*Z", "")),
+         treatworking = str_replace(name, "Z.*", ""),
+         treatment = str_replace(treatworking, ".*A", ""),
+         diff = abs(day_a - day_b),
+         early = day_a < 10) %>%
+  filter(animal_a == animal_b) %>%
+  group_by(diff, animal_a, treatment) %>%
+  summarize(median = median(value)) %>%
+  ungroup() 
+my_df <- as.data.frame(test)
+
+my_df$diff <-as.factor(my_df$diff)
+m222 <- lm(median ~ treatment*diff, data=my_df)
+anova(m222)
+plot(simulateResiduals(m222))
+emmeans(m222,pairwise~treatment) 
+emmeans(m222,pairwise~diff|treatment) 
+emmeans(m222,pairwise~treatment|diff) 
+emmeans(m222,pairwise~treatment*diff) 
+
+###Nematode Abundance (counts)######
+setwd("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase")
+#FINAL WITH PHIl August 3 bekow
+AlphaForPhilNoUncultWithMetadata <- read.csv("Alphastatsallcopy.csv")
+
+
+
+alphadata <- AlphaForPhilNoUncultWithMetadata
+alphadata$rounded <-round(alphadata$CountDrySoil, 0)
+#### this is the one, still simulate resitidnals from the other code,
+alphadata$Year2 <- as.factor(alphadata$Year2)
+alphadata$Treatment <- as.factor(alphadata$Treatment)
+m2<- glmmTMB(Moisture ~ Treatment*Year2+Seed,data =alphadata,family = nbinom2())
+Anova(m2)
+emmeans(m2,pairwise~Year2,type="response") 
+emmeans(m2,pairwise~Treatment,type="response")
+emmeans(m2,pairwise~Treatment|Year2,type="response") 
+plot(simulateResiduals(m2))
+cld(m2)
+
+g1 <- glht(m2, mcp(Year2 = "Tukey"))
+cld(g1)
+
+alphadatasub <- subset(alphadata, Year=="2021")
+alphadatasub$YearTreatment <- as.factor(alphadatasub$YearTreatment)
+m2<- glmmTMB(rounded ~ YearTreatment+Seed,data =alphadatasub,family = nbinom2())
+Anova(m2)
+g1 <- glht(m2, mcp(YearTreatment = "Tukey"))
+cld(g1)
+
+
+
+
+#######presnce absence ####
+PresenceAbsence <- read.csv("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase/PresenceAbsence.csv")
+PresenceAbsence <- read.csv("~/OneDrive - University of Florida/Grad School/Summer 2022/Colorado Nematode Communites/NewDatabase/PresenceAbsenceMORPHO.csv")
+hist(PresenceAbsence$Abundance)
+#m2<- glmmTMB(Abundance ~ Treatment*Year2+Seed,data =PresenceAbsence,family = binomial(link=logit))
+m2<- glm(Abundance ~ Treatment*Year2+Seed,data =PresenceAbsence,family = binomial(link=logit))
+plot(simulateResiduals(m2))
+Anova(m2)
+
+
+emmeans(m2,pairwise~Year2,type="response") 
+emmeans(m2,pairwise~Treatment,type="response")
+emmeans(m2,pairwise~Treatment|Year2,type="") 
+
+summary(m2)
+#Residual deviance: 33.445  on 28  degrees of freedom
+
+null.model <- glm(Abundance ~ 1, data =PresenceAbsence, family = binomial)
+full.model <- glm(Abundance ~ Treatment*Year2+Seed, data =PresenceAbsence, family = binomial(link=logit))
+objects(logit.reg)
+pseudoR2 <- (logit.reg$null.deviance - logit.reg$deviance) / logit.reg$null.deviance
+pseudoR2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
